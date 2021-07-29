@@ -25,12 +25,12 @@ static void usage() {
     err("Usage: midi2agb [options] <input.mid> [<output.s>]\n\n");
     err("Options:\n");
     err("-s <sym>      | symbol name for song header (default: file name)\n");
-    err("-m <mvl>      | master volume 0..128 (default: 128)\n");
-    err("-g <vgr>      | voicegroup symbol name (default: voicegroup000)\n");
+    err("-V <mvl>      | master volume 0..128 (default: 128)\n");
+    err("-G <vgr>      | voicegroup symbol name (default: voicegroup000)\n");
     err("-p <pri>      | song priority 0..127 (default: 0)\n");
     err("-r <rev>      | song reverb 0..127 (default: 0)\n");
     err("-n            | apply natural volume scale\n");
-    err("-v            | output debug information\n");
+    err("-o            | output debug information\n");
     err("--modt <val>  | global modulation type 0..2\n");
     err("--modsc <val> | global modulation scale 0.0 - 16.0\n");
     err("--lfos <val>  | global modulation speed 0..127\n");
@@ -108,18 +108,18 @@ int main(int argc, char *argv[]) {
                     die("-s: missing parameter\n");
                 arg_sym = argv[i];
                 fix_str(arg_sym);
-            } else if (!st.compare("-m")) {
+            } else if (!st.compare("-V")) {
                 if (++i >= argc)
-                    die("-m: missing parameter\n");
+                    die("-V: missing parameter\n");
                 int mvl = std::stoi(argv[i]);
                 if (mvl < 0 || mvl > 128)
-                    die("-m: parameter %d out of range\n", mvl);
+                    die("-V: parameter %d out of range\n", mvl);
                 arg_mvl = static_cast<uint8_t>(mvl);
-            } else if (!st.compare("-g")) {
+            } else if (!st.compare("-G")) {
                 if (++i >= argc)
-                    die("-g missing parameter\n");
-                arg_vgr = argv[i];
-                fix_str(arg_vgr);
+                    die("-G missing parameter\n");
+                //arg_vgr = argv[i];
+                //fix_str(arg_vgr);
             } else if (!st.compare("-p")) {
                 if (++i >= argc)
                     die("-p: missing parameter\n");
@@ -1027,14 +1027,6 @@ static void midi_remove_redundant_events() {
 
         size_t dummy;
 
-        /*
-         * For various event types: Delete an event if it doesn't change
-         * the MIDI state in any way. An event may also be deleted if an
-         * event of the same type follows within the same tick. However,
-         * do not do this for voice events since this may cause wrong
-         * instruments to play. (fixes #2)
-         */
-
         for (size_t ievt = 0; ievt < mtrk.midi_events.size(); ievt++) {
             midi_event& ev = *mtrk.midi_events[ievt];
             if (typeid(ev) == typeid(tempo_meta_midi_event)) {
@@ -1051,7 +1043,9 @@ static void midi_remove_redundant_events() {
                 }
             } else if (typeid(ev) == typeid(program_message_midi_event)) {
                 program_message_midi_event& pev = static_cast<program_message_midi_event&>(ev);
-                if (voice_init && pev.get_program() == voice) {
+                if ((voice_init && pev.get_program() == voice) ||
+                        find_next_event_at_tick_index<program_message_midi_event>(
+                            mtrk, ievt, dummy)) {
                     mtrk[ievt] = std::make_unique<dummy_midi_event>(mtrk[ievt]->ticks);
                 } else {
                     voice_init = true;
@@ -1731,6 +1725,7 @@ static void write_event(std::ofstream& ofs, agb_state& state, const agb_ev& ev, 
                 agb_out(ofs, "        .byte                   %s\n",
                         note_names[ev.tie.key]);
                 state.note_key = ev.tie.key;
+                state.may_repeat = false;
             } else {
                 agb_out(ofs, "        .byte                   %s , v%03d\n",
                         note_names[ev.tie.key], ev.tie.vel);
@@ -1741,22 +1736,21 @@ static void write_event(std::ofstream& ofs, agb_state& state, const agb_ev& ev, 
             if (state.note_key == ev.tie.key &&
                     state.note_vel == ev.tie.vel) {
                 agb_out(ofs, "        .byte           TIE\n");
+                state.may_repeat = false;
             } else if (state.note_vel == ev.tie.vel) {
                 agb_out(ofs, "        .byte           TIE   , %s\n",
                         note_names[ev.tie.key]);
                 state.note_key = ev.tie.key;
+                state.may_repeat = false;
             } else {
                 agb_out(ofs, "        .byte           TIE   , %s , v%03d\n",
                         note_names[ev.tie.key], ev.tie.vel);
                 state.note_key = ev.tie.key;
                 state.note_vel = ev.tie.vel;
+                state.may_repeat = false;
             }
             state.cmd_state = agb_state::cmd::TIE;
         }
-        // Because TIE is processed the same as N?? (note) and lacks the gtp? parameter
-        // it must not be repeated directly in all cases. However, it may be repeated after
-        // a W?? for exaxmple.
-        state.may_repeat = false;
         break;
     case agb_ev::ty::NOTE:
         assert(ev.note.len > 0 && ev.note.len <= 96);
